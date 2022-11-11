@@ -6,6 +6,7 @@ import com.ticketapp.auth.app.ulctools.Commands;
 import com.ticketapp.auth.app.ulctools.Utilities;
 
 import java.security.GeneralSecurityException;
+import java.util.UUID;
 
 /**
  * TODO:
@@ -82,8 +83,18 @@ public class Ticket {
         }
 
         // Example of writing:
-        byte[] message = "info".getBytes();
-        res = utils.writePages(message, 0, 6, 1);
+        byte[] message = "Tckt".getBytes();
+        res = utils.writePages(message, 0, 4, 1);
+
+        message = "0001".getBytes();
+        res = utils.writePages(message, 0, 5, 1);
+
+        String uuid = UUID.randomUUID().toString().substring(0,16);
+        System.out.println(uuid);
+        message = uuid.getBytes();
+        res = utils.writePages(message, 0, 6, 4);
+
+
 
         // Set information to show for the user
         if (res) {
