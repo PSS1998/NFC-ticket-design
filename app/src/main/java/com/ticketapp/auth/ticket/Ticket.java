@@ -1,5 +1,7 @@
 package com.ticketapp.auth.ticket;
 
+import android.util.Log;
+
 import com.ticketapp.auth.R;
 import com.ticketapp.auth.app.main.TicketActivity;
 import com.ticketapp.auth.app.ulctools.Commands;
@@ -90,7 +92,6 @@ public class Ticket {
         res = utils.writePages(message, 0, 5, 1);
 
         String uuid = UUID.randomUUID().toString().substring(0,16);
-        System.out.println(uuid);
         message = uuid.getBytes();
         res = utils.writePages(message, 0, 6, 4);
 
@@ -124,7 +125,17 @@ public class Ticket {
 
         // Example of reading:
         byte[] message = new byte[4];
-        res = utils.readPages(6, 1, message, 0);
+        res = utils.readPages(4, 1, message, 0);
+        String app_name = new String(message);
+
+        message = new byte[4];
+        res = utils.readPages(5, 1, message, 0);
+        String app_version = new String(message);
+
+        message = new byte[16];
+        res = utils.readPages(6, 4, message, 0);
+        String card_id = new String(message);
+
 
         // Set information to show for the user
         if (res) {
