@@ -8,6 +8,7 @@ import com.ticketapp.auth.app.ulctools.Commands;
 import com.ticketapp.auth.app.ulctools.Utilities;
 
 import java.security.GeneralSecurityException;
+import java.sql.Timestamp;
 import java.util.UUID;
 
 /**
@@ -95,7 +96,27 @@ public class Ticket {
         message = uuid.getBytes();
         res = utils.writePages(message, 0, 6, 4);
 
+        message = "0000".getBytes();
+        res = utils.writePages(message, 0, 10, 1);
 
+        message = new byte[4];
+        res = utils.readPages(10, 1, message, 0);
+        String number_of_rides = new String(message);
+        int int_number_of_rides = Integer.parseInt(number_of_rides, 2);
+        int_number_of_rides += 5;
+
+        number_of_rides = Integer.toBinaryString(int_number_of_rides);
+        number_of_rides = String.format("%4s", number_of_rides).replace(" ", "0");
+        message = number_of_rides.getBytes();
+        res = utils.writePages(message, 0, 10, 1);
+
+        long unixTime = System.currentTimeMillis() / 1000L;
+        unixTime += 60;
+        String string_timestamp = String.valueOf(unixTime);
+        System.out.println(string_timestamp);
+        string_timestamp = String.format("%12s", string_timestamp).replace(" ", "0");
+        message = string_timestamp.getBytes();
+        res = utils.writePages(message, 0, 11, 3);
 
         // Set information to show for the user
         if (res) {
