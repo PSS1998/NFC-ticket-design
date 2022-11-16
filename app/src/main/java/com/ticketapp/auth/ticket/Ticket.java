@@ -131,25 +131,31 @@ public class Ticket {
 
         message = new byte[4];
         res = utils.readPages(3, 1, message, 0);
-
+        byte[] byte_otp = message;
         res = utils.writePages(message, 0, 18, 1);
 
-        // print byte in binary format
+        message = new byte[4];
+        res = utils.readPages(41, 1, message, 0);
+        res = utils.writePages(message, 0, 19, 1);
+
+//        // print byte in binary format
 //        BigInteger one;
 //        one = new BigInteger(message);
 //        String strResult = one.toString(2);
 //        System.out.println("ByteArray to Binary = "+strResult);
 
-        message = new byte[4*15];
-        res = utils.readPages(4, 15, message, 0);
+        message = new byte[4*16];
+        res = utils.readPages(4, 16, message, 0);
 
         byte[] mac = new byte[4*5];
         mac = macAlgorithm.generateMac(message);
-        res = utils.writePages(mac, 0, 19, 5);
+        res = utils.writePages(mac, 0, 20, 5);
 
-        // reset counter
-
-        // inc otp
+        BigInteger bigint_otp;
+        bigint_otp = new BigInteger(byte_otp);
+        bigint_otp = bigint_otp.add(BigInteger.valueOf(1));
+        message = ByteBuffer.allocate(4).put(bigint_otp.toByteArray()).array();
+        res = utils.writePages(message, 0, 3, 1);
 
         // Set information to show for the user
         if (res) {
@@ -216,12 +222,14 @@ public class Ticket {
         message = new byte[4];
         res = utils.readPages(3, 1, message, 0);
         BigInteger bigint_otp = new BigInteger(message);
-        long otp = bigint_otp.longValue();
+        String strResult = bigint_otp.toString(2);
+        int otp = strResult.length() - strResult.replace("1", "").length();
 
         message = new byte[4];
         res = utils.readPages(18, 1, message, 0);
         BigInteger bigint_initial_otp = new BigInteger(message);
-        long initial_otp = bigint_initial_otp.longValue();
+        strResult = bigint_initial_otp.toString(2);
+        int initial_otp = strResult.length() - strResult.replace("1", "").length();
         if ((otp-initial_otp) == 2){
             // otp ok
         }
@@ -231,27 +239,50 @@ public class Ticket {
             string_timestamp = String.format("%12s", string_timestamp).replace(" ", "0");
             message = string_timestamp.getBytes();
             res = utils.writePages(message, 0, 24, 3);
-            // inc otp
+
+            bigint_otp = bigint_otp.add(BigInteger.valueOf(1));
+            message = ByteBuffer.allocate(4).put(bigint_otp.toByteArray()).array();
+            res = utils.writePages(message, 0, 3, 1);
         }
         else{
             // error
         }
 
         message = new byte[4*5];
-        res = utils.readPages(19, 5, message, 0);
+        res = utils.readPages(20, 5, message, 0);
         byte[] mac = message;
 
-        message = new byte[4*15];
-        res = utils.readPages(4, 15, message, 0);
+        message = new byte[4*16];
+        res = utils.readPages(4, 16, message, 0);
         byte[] new_mac = new byte[4*5];
         new_mac = macAlgorithm.generateMac(message);
         if (!Arrays.equals(mac, new_mac)){
             // error
         }
         else{
+            // mac is correct
         }
 
-        // inc counter
+        message = new byte[4];
+        res = utils.readPages(19, 1, message, 0);
+        byte[] byte_initial_counter = new byte[]{message[1], message[0]};
+        BigInteger bigint_initial_counter;
+        bigint_initial_counter = new BigInteger(byte_initial_counter);
+        int initial_counter = bigint_initial_counter.intValue();
+
+        message = new byte[4];
+        res = utils.readPages(41, 1, message, 0);
+        byte[] byte_counter = new byte[]{message[1], message[0]};
+        BigInteger bigint_counter;
+        bigint_counter = new BigInteger(byte_counter);
+        int counter = bigint_counter.intValue();
+
+        byte[] byte_counter_left = new byte[4];
+        byte[] byte_counter_right = new byte[4];
+        byte_counter_left = ByteBuffer.allocate(4).putInt(1).array();
+        byte_counter_right = ByteBuffer.allocate(4).putInt(0).array();
+        message = new byte[]{byte_counter_left[3], byte_counter_left[2], byte_counter_right[3], byte_counter_right[2]};
+        res = utils.writePages(message, 0, 41, 1);
 
         // Set information to show for the user
         if (res) {
