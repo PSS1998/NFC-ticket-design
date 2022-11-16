@@ -7,8 +7,11 @@ import com.ticketapp.auth.app.main.TicketActivity;
 import com.ticketapp.auth.app.ulctools.Commands;
 import com.ticketapp.auth.app.ulctools.Utilities;
 
+import java.math.BigInteger;
+import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import java.sql.Timestamp;
+import java.util.Arrays;
 import java.util.UUID;
 
 /**
@@ -85,7 +88,6 @@ public class Ticket {
             return false;
         }
 
-        // Example of writing:
         byte[] message = "Tckt".getBytes();
         res = utils.writePages(message, 0, 4, 1);
 
@@ -96,27 +98,58 @@ public class Ticket {
         message = uuid.getBytes();
         res = utils.writePages(message, 0, 6, 4);
 
-        message = "0000".getBytes();
-        res = utils.writePages(message, 0, 10, 1);
+        int a = 0;
+        byte[] b = new byte[4];
+        b = ByteBuffer.allocate(4).putInt(a).array();
+        res = utils.writePages(b, 0, 10, 1);
 
         message = new byte[4];
         res = utils.readPages(10, 1, message, 0);
-        String number_of_rides = new String(message);
-        int int_number_of_rides = Integer.parseInt(number_of_rides, 2);
+        BigInteger bigint_number_of_rides = new BigInteger(message);
+        int int_number_of_rides = bigint_number_of_rides.intValue();
         int_number_of_rides += 5;
 
-        number_of_rides = Integer.toBinaryString(int_number_of_rides);
-        number_of_rides = String.format("%4s", number_of_rides).replace(" ", "0");
-        message = number_of_rides.getBytes();
+        message = ByteBuffer.allocate(4).putInt(int_number_of_rides).array();
         res = utils.writePages(message, 0, 10, 1);
 
         long unixTime = System.currentTimeMillis() / 1000L;
         unixTime += 60;
         String string_timestamp = String.valueOf(unixTime);
-        System.out.println(string_timestamp);
         string_timestamp = String.format("%12s", string_timestamp).replace(" ", "0");
         message = string_timestamp.getBytes();
         res = utils.writePages(message, 0, 11, 3);
+
+        message = ByteBuffer.allocate(4).putInt(100).array();
+        res = utils.writePages(message, 0, 14, 1);
+
+        unixTime = System.currentTimeMillis() / 1000L;
+        unixTime += 31104000;
+        string_timestamp = String.valueOf(unixTime);
+        string_timestamp = String.format("%12s", string_timestamp).replace(" ", "0");
+        message = string_timestamp.getBytes();
+        res = utils.writePages(message, 0, 15, 3);
+
+        message = new byte[4];
+        res = utils.readPages(3, 1, message, 0);
+
+        res = utils.writePages(message, 0, 18, 1);
+
+        // print byte in binary format
+//        BigInteger one;
+//        one = new BigInteger(message);
+//        String strResult = one.toString(2);
+//        System.out.println("ByteArray to Binary = "+strResult);
+
+        message = new byte[4*15];
+        res = utils.readPages(4, 15, message, 0);
+
+        byte[] mac = new byte[4*5];
+        mac = macAlgorithm.generateMac(message);
+        res = utils.writePages(mac, 0, 19, 5);
+
+        // reset counter
+
+        // inc otp
 
         // Set information to show for the user
         if (res) {
@@ -144,7 +177,6 @@ public class Ticket {
             return false;
         }
 
-        // Example of reading:
         byte[] message = new byte[4];
         res = utils.readPages(4, 1, message, 0);
         String app_name = new String(message);
@@ -157,6 +189,69 @@ public class Ticket {
         res = utils.readPages(6, 4, message, 0);
         String card_id = new String(message);
 
+        message = new byte[4];
+        res = utils.readPages(10, 1, message, 0);
+        BigInteger bigint_number_of_rides = new BigInteger(message);
+        int int_number_of_rides = bigint_number_of_rides.intValue();
+
+        message = new byte[12];
+        res = utils.readPages(11, 3, message, 0);
+        String string_message = new String(message);
+        long expiry_date = Long.parseLong(string_message.substring(2,12));
+        long unixTime = System.currentTimeMillis() / 1000L;
+        boolean expired = unixTime > expiry_date;
+
+        message = new byte[4];
+        res = utils.readPages(14, 1, message, 0);
+        BigInteger bigint_limit_number_of_rides = new BigInteger(message);
+        int int_limit_number_of_rides = bigint_limit_number_of_rides.intValue();
+        boolean invalid_number_of_tickets = int_number_of_rides > int_limit_number_of_rides;
+
+        message = new byte[12];
+        res = utils.readPages(15, 3, message, 0);
+        string_message = new String(message);
+        long limit_expiry_date = Long.parseLong(string_message.substring(2,12));
+        boolean invalid_expiry_date = expiry_date > limit_expiry_date;
+
+        message = new byte[4];
+        res = utils.readPages(3, 1, message, 0);
+        BigInteger bigint_otp = new BigInteger(message);
+        long otp = bigint_otp.longValue();
+
+        message = new byte[4];
+        res = utils.readPages(18, 1, message, 0);
+        BigInteger bigint_initial_otp = new BigInteger(message);
+        long initial_otp = bigint_initial_otp.longValue();
+        if ((otp-initial_otp) == 2){
+            // otp ok
+        }
+        else if ((otp-initial_otp) == 1){
+            unixTime = System.currentTimeMillis() / 1000L;
+            String string_timestamp = String.valueOf(unixTime);
+            string_timestamp = String.format("%12s", string_timestamp).replace(" ", "0");
+            message = string_timestamp.getBytes();
+            res = utils.writePages(message, 0, 24, 3);
+            // inc otp
+        }
+        else{
+            // error
+        }
+
+        message = new byte[4*5];
+        res = utils.readPages(19, 5, message, 0);
+        byte[] mac = message;
+
+        message = new byte[4*15];
+        res = utils.readPages(4, 15, message, 0);
+        byte[] new_mac = new byte[4*5];
+        new_mac = macAlgorithm.generateMac(message);
+        if (!Arrays.equals(mac, new_mac)){
+            // error
+        }
+        else{
+        }
+
+        // inc counter
 
         // Set information to show for the user
         if (res) {
