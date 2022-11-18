@@ -73,6 +73,33 @@ public class Ticket {
         return infoToShow;
     }
 
+    public static void resetCardForDebug() {
+        boolean res;
+        String master_key = new String(authenticationKey);
+        byte[] message = new byte[4*5];
+        res = utils.readPages(5, 5, message, 0);
+        String card_id = new String(message);
+        String diversified_key = master_key + card_id;
+        MessageDigest digest = null;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        }
+        catch(Exception e){
+
+        }
+        byte[] byte_diversified_key = digest.digest(diversified_key.getBytes());
+        byte_diversified_key = Arrays.copyOfRange(byte_diversified_key, 0, 16);
+        res = utils.authenticate(byte_diversified_key);
+        if (!res) {
+            Utilities.log("Authentication failed in issue()", true);
+            infoToShow = "Authentication failed";
+            return;
+        }
+        message = "Tttt".getBytes();
+        res = utils.writePages(message, 0, 4, 1);
+        res = utils.writePages(defaultAuthenticationKey, 0, 44, 4);
+    }
+
     /**
      * Issue new tickets
      *
@@ -81,7 +108,10 @@ public class Ticket {
     public boolean issue(int daysValid, int uses) throws GeneralSecurityException {
         boolean res;
 
+//        resetCardForDebug();
+
         boolean is_card_formated = false;
+        boolean card_is_unusable = false;
         try {
             byte[] message = new byte[4];
             res = utils.readPages(4, 1, message, 0);
@@ -99,6 +129,14 @@ public class Ticket {
                         return false;
                     }
                     is_card_formated = false;
+                    message = new byte[4];
+                    res = utils.readPages(3, 1, message, 0);
+                    BigInteger bigint_otp = new BigInteger(message);
+                    String strResult = bigint_otp.toString(2);
+                    int otp = strResult.length() - strResult.replace("1", "").length();
+                    if (otp >= 30) {
+                        card_is_unusable = true;
+                    }
                 }
             }
             else {
@@ -110,6 +148,14 @@ public class Ticket {
                     return false;
                 }
                 is_card_formated = false;
+                message = new byte[4];
+                res = utils.readPages(3, 1, message, 0);
+                BigInteger bigint_otp = new BigInteger(message);
+                String strResult = bigint_otp.toString(2);
+                int otp = strResult.length() - strResult.replace("1", "").length();
+                if (otp >= 30) {
+                    card_is_unusable = true;
+                }
             }
         }
         catch(Exception e) {
@@ -121,6 +167,14 @@ public class Ticket {
                 return false;
             }
             is_card_formated = false;
+            byte[] message = new byte[4];
+            res = utils.readPages(3, 1, message, 0);
+            BigInteger bigint_otp = new BigInteger(message);
+            String strResult = bigint_otp.toString(2);
+            int otp = strResult.length() - strResult.replace("1", "").length();
+            if (otp >= 30) {
+                card_is_unusable = true;
+            }
         }
 
         if(is_card_formated) {
@@ -227,9 +281,15 @@ public class Ticket {
 
         BigInteger bigint_otp;
         bigint_otp = new BigInteger(byte_otp);
-        bigint_otp = bigint_otp.add(BigInteger.valueOf(1));
+        if (!card_is_unusable) {
+            bigint_otp = bigint_otp.add(BigInteger.valueOf(1));
+        }
         message = ByteBuffer.allocate(4).put(bigint_otp.toByteArray()).array();
         res = utils.writePages(message, 0, 3, 1);
+
+        if (card_is_unusable) {
+            message = "This Card is Unusable".getBytes();
+        }
 
         // Set information to show for the user
         if (res) {
