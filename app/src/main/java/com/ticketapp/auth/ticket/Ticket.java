@@ -10,6 +10,7 @@ import com.ticketapp.auth.app.ulctools.Utilities;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
 import java.sql.Timestamp;
 import java.util.Arrays;
 import java.util.UUID;
@@ -80,21 +81,102 @@ public class Ticket {
     public boolean issue(int daysValid, int uses) throws GeneralSecurityException {
         boolean res;
 
-        // Authenticate
-        res = utils.authenticate(authenticationKey);
-        if (!res) {
-            Utilities.log("Authentication failed in issue()", true);
-            infoToShow = "Authentication failed";
-            return false;
+        boolean is_card_formated = false;
+        try {
+            byte[] message = new byte[4];
+            res = utils.readPages(4, 1, message, 0);
+            String app_name = new String(message);
+            System.out.println(app_name);
+            System.out.println(app_name.equals("Tckt"));
+            if (res) {
+                if (app_name.equals("Tckt")) {
+                    is_card_formated = true;
+                }
+                else {
+                    System.out.println("Line1");
+                    // Authenticate
+                    res = utils.authenticate(defaultAuthenticationKey);
+                    if (!res) {
+                        Utilities.log("Authentication failed in issue()", true);
+                        infoToShow = "Authentication failed";
+                        return false;
+                    }
+                    message = "BREAKMEIFYOUCAN?".getBytes();
+                    res = utils.writePages(message, 0, 44, 4);
+                    is_card_formated = false;
+                }
+            }
+            else {
+                System.out.println("Line2");
+                // Authenticate
+                res = utils.authenticate(defaultAuthenticationKey);
+                if (!res) {
+                    Utilities.log("Authentication failed in issue()", true);
+                    infoToShow = "Authentication failed";
+                    return false;
+                }
+                message = "BREAKMEIFYOUCAN?".getBytes();
+                res = utils.writePages(message, 0, 44, 4);
+                is_card_formated = false;
+            }
+        }
+        catch(Exception e) {
+            System.out.println("Line3");
+            // Authenticate
+            res = utils.authenticate(defaultAuthenticationKey);
+            if (!res) {
+                Utilities.log("Authentication failed in issue()", true);
+                infoToShow = "Authentication failed";
+                return false;
+            }
+            byte[] message = "BREAKMEIFYOUCAN?".getBytes();
+            res = utils.writePages(message, 0, 44, 4);
+            is_card_formated = false;
         }
 
-        byte[] message = "Tckt".getBytes();
+        System.out.println("The key is changeded " + is_card_formated);
+
+//        // Authenticate using our key
+//        String master_key = new String(authenticationKey);
+//        byte[] message = new byte[20];
+//        res = utils.readPages(5, 5, message, 0);
+//        String card_id = new String(message);
+//        String diversified_key = master_key + card_id;
+//        MessageDigest digest = null;
+//        digest = MessageDigest.getInstance("SHA-256");
+//        byte[] byte_diversified_key = digest.digest(diversified_key.getBytes());
+//        byte_diversified_key = Arrays.copyOfRange(byte_diversified_key, 0, 16);
+//        res = utils.authenticate(byte_diversified_key);
+        if(is_card_formated) {
+            res = utils.authenticate("BREAKMEIFYOUCAN?".getBytes());
+            if (!res) {
+                Utilities.log("Authentication failed in issue()", true);
+                infoToShow = "Authentication failed";
+                return false;
+            }
+        }
+
+//        byte[] message = "BREAKMEIFYOUCAN!".getBytes();
+//        res = utils.writePages(message, 0, 44, 4);
+
+        byte[] byte_AUTH1 = new byte[4];
+        byte_AUTH1 = ByteBuffer.allocate(4).putInt(0).array();
+        byte[] message = new byte[]{byte_AUTH1[3], byte_AUTH1[0], byte_AUTH1[1], byte_AUTH1[2]};
+        res = utils.writePages(message, 0, 43, 1);
+
+        byte[] byte_AUTH0 = new byte[4];
+        byte_AUTH0 = ByteBuffer.allocate(4).putInt(10).array();
+        message = new byte[]{byte_AUTH0[3], byte_AUTH0[0], byte_AUTH0[1], byte_AUTH0[2]};
+        res = utils.writePages(message, 0, 42, 1);
+
+        message = "Tckt".getBytes();
         res = utils.writePages(message, 0, 4, 1);
 
         message = "0001".getBytes();
         res = utils.writePages(message, 0, 5, 1);
 
         String uuid = UUID.randomUUID().toString().substring(0,16);
+        System.out.println(uuid);
         message = uuid.getBytes();
         res = utils.writePages(message, 0, 6, 4);
 
@@ -138,12 +220,6 @@ public class Ticket {
         res = utils.readPages(41, 1, message, 0);
         res = utils.writePages(message, 0, 19, 1);
 
-//        // print byte in binary format
-//        BigInteger one;
-//        one = new BigInteger(message);
-//        String strResult = one.toString(2);
-//        System.out.println("ByteArray to Binary = "+strResult);
-
         message = new byte[4*16];
         res = utils.readPages(4, 16, message, 0);
 
@@ -176,7 +252,7 @@ public class Ticket {
         boolean res;
 
         // Authenticate
-        res = utils.authenticate(authenticationKey);
+        res = utils.authenticate("BREAKMEIFYOUCAN?".getBytes());
         if (!res) {
             Utilities.log("Authentication failed in issue()", true);
             infoToShow = "Authentication failed";
@@ -186,10 +262,17 @@ public class Ticket {
         byte[] message = new byte[4];
         res = utils.readPages(4, 1, message, 0);
         String app_name = new String(message);
+        System.out.println(app_name);
+        if (app_name != "Tckt"){
+            // error
+        }
 
         message = new byte[4];
         res = utils.readPages(5, 1, message, 0);
         String app_version = new String(message);
+        if (app_version != "0001"){
+            // error
+        }
 
         message = new byte[16];
         res = utils.readPages(6, 4, message, 0);
@@ -206,11 +289,15 @@ public class Ticket {
         long expiry_date = Long.parseLong(string_message.substring(2,12));
         long unixTime = System.currentTimeMillis() / 1000L;
         boolean expired = unixTime > expiry_date;
+        if (expired){
+            // error
+        }
 
         message = new byte[4];
         res = utils.readPages(14, 1, message, 0);
         BigInteger bigint_limit_number_of_rides = new BigInteger(message);
         int int_limit_number_of_rides = bigint_limit_number_of_rides.intValue();
+        System.out.println(int_limit_number_of_rides);
         boolean invalid_number_of_tickets = int_number_of_rides > int_limit_number_of_rides;
 
         message = new byte[12];
