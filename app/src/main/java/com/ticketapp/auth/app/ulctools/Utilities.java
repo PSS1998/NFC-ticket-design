@@ -7,6 +7,8 @@ package com.ticketapp.auth.app.ulctools;
 
 import android.util.Log;
 
+import java.math.BigInteger;
+
 /**
  * Compatibility class to make Desktop versions of Ticket class methods compatible with the Android application.
  */
@@ -106,5 +108,12 @@ public class Utilities {
             Log.e("Error", message);
         else
             Log.i("Debug", message);
+    }
+
+    public static void printBinaryValue(byte[] memory){
+        BigInteger one;
+        one = new BigInteger(memory);
+        String strResult = one.toString(2);
+        System.out.println("ByteArray to Binary = "+strResult);
     }
 }
