@@ -12,7 +12,9 @@ import java.nio.ByteBuffer;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.sql.Timestamp;
+import java.text.SimpleDateFormat;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.UUID;
 
 /**
@@ -37,9 +39,9 @@ public class Ticket {
     private static Utilities utils;
     private static Commands ul;
 
-    private final Boolean isValid = false;
-    private final int remainingUses = 0;
-    private final int expiryTime = 0;
+    private static Boolean isValid = false;
+    private static int remainingUses = 0;
+    private static int expiryTime = 0;
 
     private static String infoToShow = "-"; // Use this to show messages
 
@@ -98,6 +100,10 @@ public class Ticket {
         message = "Tttt".getBytes();
         res = utils.writePages(message, 0, 4, 1);
         res = utils.writePages(defaultAuthenticationKey, 0, 44, 4);
+        int a = 0;
+        byte[] b = new byte[4];
+        b = ByteBuffer.allocate(4).putInt(a).array();
+        res = utils.writePages(b, 0, 10, 1);
     }
 
     /**
@@ -119,6 +125,14 @@ public class Ticket {
             if (res) {
                 if (app_name.equals("Tckt")) {
                     is_card_formated = true;
+                    message = new byte[4];
+                    res = utils.readPages(3, 1, message, 0);
+                    BigInteger bigint_otp = new BigInteger(message);
+                    String strResult = bigint_otp.toString(2);
+                    int otp = strResult.length() - strResult.replace("1", "").length();
+                    if (otp >= 30) {
+                        card_is_unusable = true;
+                    }
                 }
                 else {
                     // Authenticate
@@ -223,6 +237,10 @@ public class Ticket {
             b = ByteBuffer.allocate(4).putInt(a).array();
             res = utils.writePages(b, 0, 10, 1);
 
+            message = new byte[4];
+            res = utils.readPages(41, 1, message, 0);
+            res = utils.writePages(message, 0, 19, 1);
+
             // generating new key
             String master_key = new String(authenticationKey);
             message = new byte[4*5];
@@ -237,7 +255,23 @@ public class Ticket {
 
         }
 
-        byte[] message = new byte[4];
+        byte[] message = new byte[12];
+        res = utils.readPages(11, 3, message, 0);
+        String string_message = new String(message);
+        long expiry_date = Long.parseLong(string_message.substring(2,12));
+        expiryTime = Math.toIntExact(expiry_date);
+        long unixTime = System.currentTimeMillis() / 1000L;
+        boolean expired = unixTime > expiry_date;
+        if (expired){
+            message = new byte[4];
+            res = utils.readPages(41, 1, message, 0);
+            res = utils.writePages(message, 0, 19, 1);
+
+            message = ByteBuffer.allocate(4).putInt(0).array();
+            res = utils.writePages(message, 0, 10, 1);
+        }
+
+        message = new byte[4];
         res = utils.readPages(10, 1, message, 0);
         BigInteger bigint_number_of_rides = new BigInteger(message);
         int int_number_of_rides = bigint_number_of_rides.intValue();
@@ -246,7 +280,7 @@ public class Ticket {
         message = ByteBuffer.allocate(4).putInt(int_number_of_rides).array();
         res = utils.writePages(message, 0, 10, 1);
 
-        long unixTime = System.currentTimeMillis() / 1000L;
+        unixTime = System.currentTimeMillis() / 1000L;
         unixTime += 60;
         String string_timestamp = String.valueOf(unixTime);
         string_timestamp = String.format("%12s", string_timestamp).replace(" ", "0");
@@ -265,12 +299,8 @@ public class Ticket {
 
         message = new byte[4];
         res = utils.readPages(3, 1, message, 0);
-        byte[] byte_otp = message;
+        byte[] byte_otp = Arrays.copyOf(message, message.length);
         res = utils.writePages(message, 0, 18, 1);
-
-        message = new byte[4];
-        res = utils.readPages(41, 1, message, 0);
-        res = utils.writePages(message, 0, 19, 1);
 
         message = new byte[4*16];
         res = utils.readPages(4, 16, message, 0);
@@ -279,6 +309,7 @@ public class Ticket {
         mac = macAlgorithm.generateMac(message);
         res = utils.writePages(mac, 0, 20, 5);
 
+        message = new byte[4];
         BigInteger bigint_otp;
         bigint_otp = new BigInteger(byte_otp);
         if (!card_is_unusable) {
@@ -289,6 +320,9 @@ public class Ticket {
 
         if (card_is_unusable) {
             message = "This Card is Unusable".getBytes();
+        }
+        else{
+            message = "Card issued successfully".getBytes();
         }
 
         // Set information to show for the user
@@ -308,6 +342,9 @@ public class Ticket {
      */
     public boolean use() throws GeneralSecurityException {
         boolean res;
+
+        boolean ticket_validation_was_not_success = false;
+        boolean first_time_validation = false;
 
         // Authenticate
         String master_key = new String(authenticationKey);
@@ -329,15 +366,19 @@ public class Ticket {
         message = new byte[4];
         res = utils.readPages(4, 1, message, 0);
         String app_name = new String(message);
-        if (app_name != "Tckt"){
+        if (!app_name.equals("Tckt")){
             // error
+            System.out.println("app name was wrong");
+            ticket_validation_was_not_success = true;
         }
 
         message = new byte[4];
         res = utils.readPages(5, 1, message, 0);
         String app_version = new String(message);
-        if (app_version != "0001"){
+        if (!app_version.equals("0001")){
             // error
+            System.out.println("app version was wrong");
+            ticket_validation_was_not_success = true;
         }
 
         message = new byte[16];
@@ -353,23 +394,24 @@ public class Ticket {
         res = utils.readPages(11, 3, message, 0);
         String string_message = new String(message);
         long expiry_date = Long.parseLong(string_message.substring(2,12));
+        expiryTime = Math.toIntExact(expiry_date);
         long unixTime = System.currentTimeMillis() / 1000L;
         boolean expired = unixTime > expiry_date;
         if (expired){
             // error
+            System.out.println("ticket was expired");
+            ticket_validation_was_not_success = true;
         }
-
-        message = new byte[4];
-        res = utils.readPages(14, 1, message, 0);
-        BigInteger bigint_limit_number_of_rides = new BigInteger(message);
-        int int_limit_number_of_rides = bigint_limit_number_of_rides.intValue();
-        boolean invalid_number_of_tickets = int_number_of_rides > int_limit_number_of_rides;
 
         message = new byte[12];
         res = utils.readPages(15, 3, message, 0);
         string_message = new String(message);
         long limit_expiry_date = Long.parseLong(string_message.substring(2,12));
         boolean invalid_expiry_date = expiry_date > limit_expiry_date;
+        if (invalid_expiry_date){
+            System.out.println("invalid expiry");
+            ticket_validation_was_not_success = true;
+        }
 
         message = new byte[4];
         res = utils.readPages(3, 1, message, 0);
@@ -384,25 +426,20 @@ public class Ticket {
         int initial_otp = strResult.length() - strResult.replace("1", "").length();
         if ((otp-initial_otp) == 2){
             // otp ok
+            first_time_validation = false;
         }
         else if ((otp-initial_otp) == 1){
-            unixTime = System.currentTimeMillis() / 1000L;
-            String string_timestamp = String.valueOf(unixTime);
-            string_timestamp = String.format("%12s", string_timestamp).replace(" ", "0");
-            message = string_timestamp.getBytes();
-            res = utils.writePages(message, 0, 24, 3);
-
-            bigint_otp = bigint_otp.add(BigInteger.valueOf(1));
-            message = ByteBuffer.allocate(4).put(bigint_otp.toByteArray()).array();
-            res = utils.writePages(message, 0, 3, 1);
+            first_time_validation = true;
         }
         else{
             // error
+            System.out.println("wrong otp");
+            ticket_validation_was_not_success = true;
         }
 
         message = new byte[4*5];
         res = utils.readPages(20, 5, message, 0);
-        byte[] mac = message;
+        byte[] mac = Arrays.copyOf(message, message.length);
 
         message = new byte[4*16];
         res = utils.readPages(4, 16, message, 0);
@@ -410,9 +447,35 @@ public class Ticket {
         new_mac = macAlgorithm.generateMac(message);
         if (!Arrays.equals(mac, new_mac)){
             // error
+            System.out.println("wrong mac");
+            ticket_validation_was_not_success = true;
         }
         else{
             // mac is correct
+            if (first_time_validation) {
+                message = new byte[12];
+                res = utils.readPages(11, 3, message, 0);
+                string_message = new String(message);
+                expiry_date = Long.parseLong(string_message.substring(2, 12));
+                unixTime = System.currentTimeMillis() / 1000L;
+                expiry_date = expiry_date + (60 - (expiry_date - unixTime));
+                String string_timestamp = String.valueOf(expiry_date);
+                string_timestamp = String.format("%12s", string_timestamp).replace(" ", "0");
+                message = string_timestamp.getBytes();
+                res = utils.writePages(message, 0, 11, 3);
+
+                // calculate new mac and write it to memory
+                message = new byte[4*16];
+                res = utils.readPages(4, 16, message, 0);
+                new_mac = new byte[4*5];
+                new_mac = macAlgorithm.generateMac(message);
+                res = utils.writePages(new_mac, 0, 20, 5);
+
+                message = new byte[4];
+                bigint_otp = bigint_otp.add(BigInteger.valueOf(1));
+                message = ByteBuffer.allocate(4).put(bigint_otp.toByteArray()).array();
+                res = utils.writePages(message, 0, 3, 1);
+            }
         }
 
         message = new byte[4];
@@ -428,13 +491,39 @@ public class Ticket {
         BigInteger bigint_counter;
         bigint_counter = new BigInteger(byte_counter);
         int counter = bigint_counter.intValue();
+        if ((int_number_of_rides - (counter-initial_counter)) <= 0){
+            remainingUses = int_number_of_rides - (counter-initial_counter);
+            System.out.println("no ticket left");
+            ticket_validation_was_not_success = true;
+        }
 
-        byte[] byte_counter_left = new byte[4];
-        byte[] byte_counter_right = new byte[4];
-        byte_counter_left = ByteBuffer.allocate(4).putInt(1).array();
-        byte_counter_right = ByteBuffer.allocate(4).putInt(0).array();
-        message = new byte[]{byte_counter_left[3], byte_counter_left[2], byte_counter_right[3], byte_counter_right[2]};
-        res = utils.writePages(message, 0, 41, 1);
+        message = new byte[4];
+        res = utils.readPages(14, 1, message, 0);
+        BigInteger bigint_limit_number_of_rides = new BigInteger(message);
+        int int_limit_number_of_rides = bigint_limit_number_of_rides.intValue();
+        boolean invalid_number_of_tickets = (int_number_of_rides - (counter-initial_counter)) > int_limit_number_of_rides;
+        if (invalid_number_of_tickets){
+            System.out.println("more ticket than limit");
+            ticket_validation_was_not_success = true;
+        }
+
+        if (!ticket_validation_was_not_success) {
+            byte[] byte_counter_left = new byte[4];
+            byte[] byte_counter_right = new byte[4];
+            byte_counter_left = ByteBuffer.allocate(4).putInt(1).array();
+            byte_counter_right = ByteBuffer.allocate(4).putInt(0).array();
+            message = new byte[]{byte_counter_left[3], byte_counter_left[2], byte_counter_right[3], byte_counter_right[2]};
+            res = utils.writePages(message, 0, 41, 1);
+        }
+
+        if (ticket_validation_was_not_success){
+            isValid = false;
+            message = "Ticket validation was not a success".getBytes();
+        }
+        else {
+            isValid = true;
+            message = "Ticket validation was a success".getBytes();
+        }
 
         // Set information to show for the user
         if (res) {
