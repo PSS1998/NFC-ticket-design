@@ -1,5 +1,6 @@
 package com.ticketapp.auth.ticket;
 
+import android.os.AsyncTask;
 import android.util.Log;
 
 import com.ticketapp.auth.R;
@@ -7,15 +8,27 @@ import com.ticketapp.auth.app.main.TicketActivity;
 import com.ticketapp.auth.app.ulctools.Commands;
 import com.ticketapp.auth.app.ulctools.Utilities;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.math.BigInteger;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.ByteBuffer;
+import java.nio.LongBuffer;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.sql.Timestamp;
-import java.text.SimpleDateFormat;
 import java.util.Arrays;
-import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -32,7 +45,8 @@ public class Ticket {
 
     /** TODO: Change these according to your design. Diversify the keys. */
     private static final byte[] authenticationKey = TicketActivity.outer.getString(R.string.diversified_auth_key).getBytes(); // 16-byte key
-    private static final byte[] hmacKey = defaultHMACKey; // 16-byte key
+    private static final byte[] hmacKey = TicketActivity.outer.getString(R.string.diversified_mac_key).getBytes();
+//    private static final byte[] hmacKey = defaultHMACKey;
 
     public static byte[] data = new byte[192];
 
@@ -45,6 +59,9 @@ public class Ticket {
     private static int expiryTime = 0;
 
     private static String infoToShow = "-"; // Use this to show messages
+
+    private static HashMap<String, String> cardLastUsed = new HashMap<>();
+    private HttpURLConnection urlConnection = null;
 
     /** Create a new ticket */
     public Ticket() throws GeneralSecurityException {
@@ -79,9 +96,13 @@ public class Ticket {
     public static void resetCardForDebug() {
         boolean res;
         String master_key = new String(authenticationKey);
-        byte[] message = new byte[4*5];
-        res = utils.readPages(5, 5, message, 0);
-        String card_id = new String(message);
+//        byte[] message = new byte[4*5];
+//        res = utils.readPages(5, 5, message, 0);
+//        String card_id = new String(message);
+        byte[] message = new byte[4*2];
+        res = utils.readPages(0, 2, message, 0);
+        BigInteger cid = new BigInteger(message);
+        String card_id = cid.toString();
         String diversified_key = master_key + card_id;
         MessageDigest digest = null;
         try {
@@ -167,7 +188,7 @@ public class Ticket {
 
         if(is_card_formated) {
             // Authenticate using our key
-            byte[] byte_diversified_key = GenerateDiversifiedKey();
+            byte[] byte_diversified_key = generateDiversifiedAuthKey();
             res = utils.authenticate(byte_diversified_key);
             if (!res) {
                 Utilities.log("Authentication failed in issue()", true);
@@ -197,8 +218,8 @@ public class Ticket {
 
         }
 
-        boolean expired = isTicketExpired();
-        if (expired){
+        int seconds_to_expiry = secondsToTicketExpiry();
+        if (seconds_to_expiry == 0){
             writeInitialCounter();
             InitializeNumberOfTickets();
         }
@@ -213,17 +234,43 @@ public class Ticket {
 
         byte[] byte_otp = writeInitialOTP();
 
+        int initial_counter = getInitialCounter();
+        int int_number_of_rides = getNumberOfRides();
+        int counter = getCounter();
+        int number_of_tickets_left = (int_number_of_rides - (counter-initial_counter));
+
+        boolean first_time_validation;
+        if ((counter-initial_counter) == 0){
+            first_time_validation = false;
+        }
+        else{
+            first_time_validation = true;
+        }
+
         byte[] memory = readAllMemory();
 
-        writeMAC(memory);
+        writeMAC(memory, first_time_validation);
 
-        res = incOTP(card_is_unusable, byte_otp);
+//        res = incOTP(card_is_unusable, byte_otp);
+//        if (!card_is_unusable){
+//            incCounter();
+//        }
 
         if (card_is_unusable) {
+//            String message_string = "Number of tickets: "+number_of_tickets_left;
+//            message = message_string.getBytes();
             message = "This Card is Unusable".getBytes();
         }
         else{
-            message = "Card issued successfully".getBytes();
+            String message_string = "Number of tickets: "+number_of_tickets_left;
+            message = message_string.getBytes();
+//            message = "Card issued successfully".getBytes();
+
+            String card_id = getCardID();
+//            sendLogToServer(card_id, true);
+            IOAsyncTask runner = new IOAsyncTask();
+            MyTaskParams params = new MyTaskParams(card_id, "issue");
+            runner.execute(params);
         }
 
         // Set information to show for the user
@@ -249,11 +296,21 @@ public class Ticket {
         return res;
     }
 
-    private void writeMAC(byte[] message) {
+    private void writeMAC(byte[] message, boolean first_time_validation) throws GeneralSecurityException {
+        int page_number;
+        if (first_time_validation){
+            page_number = 21;
+        }
+        else {
+            page_number = 20;
+        }
         boolean res;
-        byte[] mac = new byte[4*5];
+        byte[] byte_diversified_mac_key = generateDiversifiedMacKey();
+        macAlgorithm.setKey(byte_diversified_mac_key);
+        byte[] mac = new byte[4*1];
         mac = macAlgorithm.generateMac(message);
-        res = utils.writePages(mac, 0, 20, 5);
+        mac = Arrays.copyOfRange(mac, 0, 4);
+        res = utils.writePages(mac, 0, page_number, 1);
     }
 
     private byte[] readAllMemory() {
@@ -291,11 +348,13 @@ public class Ticket {
     private void writeExpiryDate() {
         boolean res;
         long unixTime = System.currentTimeMillis() / 1000L;
+        unixTime -= 1577829600; // timestamp for beginning of 2020
         unixTime += 60;
-        String string_timestamp = String.valueOf(unixTime);
-        string_timestamp = String.format("%12s", string_timestamp).replace(" ", "0");
-        byte[] message = string_timestamp.getBytes();
-        res = utils.writePages(message, 0, 11, 3);
+//        String string_timestamp = String.valueOf(unixTime);
+//        string_timestamp = String.format("%12s", string_timestamp).replace(" ", "0");
+//        byte[] message = string_timestamp.getBytes();
+        byte[] message = ByteBuffer.allocate(4).putInt((int) unixTime).array();
+        res = utils.writePages(message, 0, 11, 1);
     }
 
     private void incNumberOfTickets() {
@@ -320,36 +379,66 @@ public class Ticket {
         res = utils.writePages(message, 0, 10, 1);
     }
 
-    private boolean isTicketExpired() {
+    private int secondsToTicketExpiry() {
         boolean res;
-        byte[] message = new byte[12];
-        res = utils.readPages(11, 3, message, 0);
-        String string_message = new String(message);
-        long expiry_date = Long.parseLong(string_message.substring(2,12));
+//        byte[] message = new byte[12];
+//        res = utils.readPages(11, 3, message, 0);
+//        String string_message = new String(message);
+//        long expiry_date = Long.parseLong(string_message.substring(2,12));
+        byte[] message = new byte[4];
+        res = utils.readPages(11, 1, message, 0);
+        long expiry_date = ByteBuffer.wrap(message).getInt();
         expiryTime = Math.toIntExact(expiry_date);
         long unixTime = System.currentTimeMillis() / 1000L;
+        unixTime -= 1577829600;
         boolean expired = unixTime > expiry_date;
-        return expired;
+        System.out.println("bilit expired chie "+expired);
+        if (expired == true){
+            return 0;
+        }
+        else{
+            System.out.println((int)(expiry_date - unixTime));
+            return (int)(expiry_date - unixTime);
+        }
     }
 
     private void writeAuthenticationKey() throws NoSuchAlgorithmException {
         boolean res;
-        byte[] byte_diversified_key = GenerateDiversifiedKey();
+        byte[] byte_diversified_key = generateDiversifiedAuthKey();
         res = utils.writePages(byte_diversified_key, 0, 44, 4);
     }
 
-    private byte[] GenerateDiversifiedKey() throws NoSuchAlgorithmException {
+    private byte[] generateDiversifiedAuthKey() throws NoSuchAlgorithmException {
         boolean res;
         String master_key = new String(authenticationKey);
-        byte[] message = new byte[4*5];
-        res = utils.readPages(5, 5, message, 0);
-        String card_id = new String(message);
+        return generateDiversifiedKey(master_key);
+    }
+
+    private byte[] generateDiversifiedKey(String master_key) throws NoSuchAlgorithmException {
+        boolean res;
+        byte[] message = new byte[4*2];
+        res = utils.readPages(0, 2, message, 0);
+        BigInteger cid = new BigInteger(message);
+        System.out.println("card id");
+        System.out.println(cid.toString());
+        String card_id = cid.toString();
+//        message = new byte[4*5];
+//        res = utils.readPages(5, 5, message, 0);
+//        String card_id = new String(message);
+//        System.out.println("my card id");
+//        System.out.println(card_id);
         String diversified_key = master_key + card_id;
         MessageDigest digest = null;
         digest = MessageDigest.getInstance("SHA-256");
         byte[] byte_diversified_key = digest.digest(diversified_key.getBytes());
         byte_diversified_key = Arrays.copyOfRange(byte_diversified_key, 0, 16);
         return byte_diversified_key;
+    }
+
+    private byte[] generateDiversifiedMacKey() throws NoSuchAlgorithmException {
+        boolean res;
+        String master_key = new String(hmacKey);
+        return generateDiversifiedKey(master_key);
     }
 
     private void writeInitialCounter() {
@@ -412,11 +501,17 @@ public class Ticket {
 
     private boolean isCardUnUsable() {
         byte[] message = new byte[4];
-        utils.readPages(3, 1, message, 0);
-        BigInteger bigint_otp = new BigInteger(message);
-        String strResult = bigint_otp.toString(2);
-        int otp = strResult.length() - strResult.replace("1", "").length();
-        if (otp >= 30) {
+        utils.readPages(41, 1, message, 0);
+        byte[] byte_counter = new byte[]{message[1], message[0]};
+        BigInteger bigint_counter;
+        bigint_counter = new BigInteger(byte_counter);
+        int counter = bigint_counter.intValue();
+//        byte[] message = new byte[4];
+//        utils.readPages(3, 1, message, 0);
+//        BigInteger bigint_otp = new BigInteger(message);
+//        String strResult = bigint_otp.toString(2);
+//        int otp = strResult.length() - strResult.replace("1", "").length();
+        if (counter >= 65527) {
             return true;
         }
         return false;
@@ -435,7 +530,7 @@ public class Ticket {
         boolean first_time_validation = false;
 
         // Authenticate
-        byte[] byte_diversified_key = GenerateDiversifiedKey();
+        byte[] byte_diversified_key = generateDiversifiedAuthKey();
         res = utils.authenticate(byte_diversified_key);
         if (!res) {
             Utilities.log("Authentication failed in issue()", true);
@@ -460,12 +555,34 @@ public class Ticket {
         String card_id = getCardID();
 
         int int_number_of_rides = getNumberOfRides();
+        int initial_counter = getInitialCounter();
+        int counter = getCounter();
+        int number_of_tickets_left = (int_number_of_rides - (counter-initial_counter));
 
-        boolean expired = isTicketExpired();
-        if (expired){
+        if ((counter-initial_counter) > 0){
+            // issuing ok
+            first_time_validation = false;
+        }
+        else if ((counter-initial_counter) == 0){
+            first_time_validation = true;
+        }
+        else{
             // error
-            System.out.println("ticket was expired");
+//            System.out.println("tearing happened during issuing");
             ticket_validation_was_not_success = true;
+        }
+
+        int seconds_to_expiry;
+        if (first_time_validation){
+            seconds_to_expiry = 60;
+        }
+        else {
+            seconds_to_expiry = secondsToTicketExpiry();
+            if (seconds_to_expiry == 0) {
+                // error
+                System.out.println("ticket was expired");
+                ticket_validation_was_not_success = true;
+            }
         }
 
         boolean invalid_expiry_date = isTicketExpiryMoreThanLimit();
@@ -474,28 +591,31 @@ public class Ticket {
             ticket_validation_was_not_success = true;
         }
 
-        int otp = getOTP();
+//        int otp = getOTP();
+//
+//        int initial_otp = getInitialOTP();
 
-        int initial_otp = getInitialOTP();
+//        if ((counter-initial_counter) > 1){
+//            // issuing ok
+//            first_time_validation = false;
+//        }
+//        else if ((counter-initial_counter) == 1){
+//            first_time_validation = true;
+//        }
+//        else{
+//            // error
+//            System.out.println("tearing happened during issuing");
+////            ticket_validation_was_not_success = true;
+//        }
 
-        if ((otp-initial_otp) == 2){
-            // otp ok
-            first_time_validation = false;
-        }
-        else if ((otp-initial_otp) == 1){
-            first_time_validation = true;
-        }
-        else{
-            // error
-            System.out.println("wrong otp");
-//            ticket_validation_was_not_success = true;
-        }
-
-        byte[] mac = getMAC();
+        byte[] mac = getMAC(first_time_validation);
 
         byte[] memory = readAllMemory();
 
+        byte[] byte_diversified_mac_key = generateDiversifiedMacKey();
+        macAlgorithm.setKey(byte_diversified_mac_key);
         byte[] new_mac = macAlgorithm.generateMac(memory);
+        new_mac = Arrays.copyOfRange(new_mac, 0, 4);
         if (!Arrays.equals(mac, new_mac)){
             // error
             System.out.println("wrong mac");
@@ -508,18 +628,14 @@ public class Ticket {
 
                 // calculate new mac and write it to memory
                 memory = readAllMemory();
-                writeMAC(memory);
+                writeMAC(memory, true);
 
-                byte[] byte_otp = new byte[4];
-                res = utils.readPages(3, 1, byte_otp, 0);
-                res = incOTP(false, byte_otp);
+//                byte[] byte_otp = new byte[4];
+//                res = utils.readPages(3, 1, byte_otp, 0);
+//                res = incOTP(false, byte_otp);
             }
         }
 
-        int initial_counter = getInitialCounter();
-
-        int counter = getCounter();
-        int number_of_tickets_left = (int_number_of_rides - (counter-initial_counter));
         if (number_of_tickets_left <= 0){
             remainingUses = number_of_tickets_left;
             System.out.println("no ticket left");
@@ -533,6 +649,15 @@ public class Ticket {
             ticket_validation_was_not_success = true;
         }
 
+        if (cardLastUsed.containsKey(card_id)) {
+            long last_used = Long.parseLong(cardLastUsed.get(card_id));
+            long unixTime = System.currentTimeMillis() / 1000L;
+            if ((unixTime - 3) < last_used) {
+                System.out.println("double tap by mistake");
+                ticket_validation_was_not_success = true;
+            }
+        }
+
         if (!ticket_validation_was_not_success) {
             res = incCounter();
         }
@@ -543,7 +668,17 @@ public class Ticket {
         }
         else {
             isValid = true;
-            message = "Ticket validation was a success".getBytes();
+            String message_string = "Ticket validation was a success. Rides left: "+(number_of_tickets_left-1)+", Time left: "+seconds_to_expiry;
+            message = message_string.getBytes();
+//            message = "Ticket validation was a success".getBytes();
+
+            long unixTime = System.currentTimeMillis() / 1000L;
+            cardLastUsed.put(card_id, String.valueOf(unixTime));
+
+//            sendLogToServer(card_id, false);
+            IOAsyncTask runner = new IOAsyncTask();
+            MyTaskParams params = new MyTaskParams(card_id, "validation");
+            runner.execute(params);
         }
 
         // Set information to show for the user
@@ -568,10 +703,11 @@ public class Ticket {
     }
 
     private int getLimitOfNumberOfTickets() {
-        byte[] message = new byte[4];
-        boolean res = utils.readPages(14, 1, message, 0);
-        BigInteger bigint_limit_number_of_rides = new BigInteger(message);
-        int int_limit_number_of_rides = bigint_limit_number_of_rides.intValue();
+//        byte[] message = new byte[4];
+//        boolean res = utils.readPages(14, 1, message, 0);
+//        BigInteger bigint_limit_number_of_rides = new BigInteger(message);
+//        int int_limit_number_of_rides = bigint_limit_number_of_rides.intValue();
+        int int_limit_number_of_rides = 100;
         return int_limit_number_of_rides;
     }
 
@@ -599,22 +735,34 @@ public class Ticket {
 
     private void updateExpiryDate() {
         boolean res;
-        byte[] message = new byte[12];
-        res = utils.readPages(11, 3, message, 0);
-        String string_message = new String(message);
-        long expiry_date = Long.parseLong(string_message.substring(2, 12));
+//        byte[] message = new byte[12];
+//        res = utils.readPages(11, 3, message, 0);
+//        String string_message = new String(message);
+//        long expiry_date = Long.parseLong(string_message.substring(2, 12));
+        byte[] message = new byte[4];
+        res = utils.readPages(11, 1, message, 0);
+        long expiry_date = ByteBuffer.wrap(message).getInt();
         long unixTime = System.currentTimeMillis() / 1000L;
+        unixTime -= 1577829600;
         expiry_date = expiry_date + (60 - (expiry_date - unixTime));
-        String string_timestamp = String.valueOf(expiry_date);
-        string_timestamp = String.format("%12s", string_timestamp).replace(" ", "0");
-        message = string_timestamp.getBytes();
-        res = utils.writePages(message, 0, 11, 3);
+//        String string_timestamp = String.valueOf(expiry_date);
+//        string_timestamp = String.format("%12s", string_timestamp).replace(" ", "0");
+//        message = string_timestamp.getBytes();
+        message = ByteBuffer.allocate(4).putInt((int) expiry_date).array();
+        res = utils.writePages(message, 0, 11, 1);
     }
 
-    private byte[] getMAC() {
+    private byte[] getMAC(boolean first_time_validation) {
+        int page_number;
+        if (first_time_validation){
+            page_number = 20;
+        }
+        else {
+            page_number = 21;
+        }
         boolean res;
-        byte[] message = new byte[4*5];
-        res = utils.readPages(20, 5, message, 0);
+        byte[] message = new byte[4*1];
+        res = utils.readPages(page_number, 1, message, 0);
         byte[] mac = Arrays.copyOf(message, message.length);
         return mac;
     }
@@ -644,13 +792,17 @@ public class Ticket {
 
     private boolean isTicketExpiryMoreThanLimit() {
         boolean res;
-        byte[] message = new byte[12];
-        res = utils.readPages(11, 3, message, 0);
-        String string_message = new String(message);
-        long expiry_date = Long.parseLong(string_message.substring(2,12));
-        res = utils.readPages(15, 3, message, 0);
-        string_message = new String(message);
-        long limit_expiry_date = Long.parseLong(string_message.substring(2,12));
+//        byte[] message = new byte[12];
+//        res = utils.readPages(15, 3, message, 0);
+//        String string_message = new String(message);
+//        long limit_expiry_date = Long.parseLong(string_message.substring(2,12));
+        int limit_expiry_date = 1576800000; // 50 years
+//        res = utils.readPages(11, 3, message, 0);
+//        string_message = new String(message);
+//        long expiry_date = Long.parseLong(string_message.substring(2,12));
+        byte[] message = new byte[4];
+        res = utils.readPages(11, 1, message, 0);
+        long expiry_date = ByteBuffer.wrap(message).getInt();
         boolean invalid_expiry_date = expiry_date > limit_expiry_date;
         return invalid_expiry_date;
     }
@@ -666,9 +818,11 @@ public class Ticket {
 
     private String getCardID() {
         boolean res;
-        byte[] message = new byte[16];
-        res = utils.readPages(6, 4, message, 0);
-        return new String(message);
+        byte[] message = new byte[4*2];
+        res = utils.readPages(0, 2, message, 0);
+        BigInteger cid = new BigInteger(message);
+        String card_id = cid.toString();
+        return card_id;
     }
 
     private String getAppVersion() {
@@ -685,5 +839,97 @@ public class Ticket {
         res = utils.readPages(4, 1, message, 0);
         String app_name = new String(message);
         return app_name;
+    }
+
+    private void sendLogToServer(String card_id, String type) {
+        try {
+            URL url = new URL("http://3.82.215.225:5000/ticketing-log");
+
+            urlConnection = (HttpURLConnection) url.openConnection();
+
+//            int code = urlConnection.getResponseCode();
+//
+//            BufferedReader rd = new BufferedReader(new InputStreamReader(
+//                    urlConnection.getInputStream()));
+//            String line;
+//            while ((line = rd.readLine()) != null) {
+//                Log.i("data", line);
+//            }
+
+            urlConnection.setReadTimeout(10000);
+            urlConnection.setConnectTimeout(15000);
+            urlConnection.setRequestMethod("POST");
+            urlConnection.setDoInput(true);
+            urlConnection.setDoOutput(true);
+
+            long unixTime = System.currentTimeMillis() / 1000L;
+            String string_timestamp = String.valueOf(unixTime);
+            string_timestamp = String.format("%10s", string_timestamp).replace(" ", "0");
+
+            HashMap<String, String> params = new HashMap<String, String>();
+            params.put("ID", card_id);
+            params.put("type", type);
+            params.put("time", string_timestamp);
+
+            StringBuilder result = new StringBuilder();
+            boolean first = true;
+            for(Map.Entry<String, String> entry : params.entrySet()){
+                if (first)
+                    first = false;
+                else
+                    result.append("&");
+
+                result.append(URLEncoder.encode(entry.getKey(), "UTF-8"));
+                result.append("=");
+                result.append(URLEncoder.encode(entry.getValue(), "UTF-8"));
+            }
+
+            System.out.println(result.toString());
+
+            OutputStream os = new BufferedOutputStream(urlConnection.getOutputStream());
+            BufferedWriter writer = new BufferedWriter(
+                    new OutputStreamWriter(os, "UTF-8"));
+            writer.write(result.toString());
+            writer.flush();
+
+            int code = urlConnection.getResponseCode();
+
+            BufferedReader rd = new BufferedReader(new InputStreamReader(
+                    urlConnection.getInputStream()));
+            String line;
+            while ((line = rd.readLine()) != null) {
+                Log.i("data", line);
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            if (urlConnection != null) {
+                urlConnection.disconnect();
+            }
+        }
+    }
+
+    private static class MyTaskParams {
+        String id;
+        String type;
+
+        MyTaskParams(String id, String type) {
+            this.id = id;
+            this.type = type;
+        }
+    }
+
+    class IOAsyncTask extends AsyncTask<MyTaskParams, Void, String> {
+        @Override
+        protected String doInBackground(MyTaskParams... params) {
+            sendLogToServer(params[0].id, params[0].type);
+            return "done";
+        }
+
+        @Override
+        protected void onPostExecute(String response) {
+            Log.d("networking", response);
+        }
     }
 }
