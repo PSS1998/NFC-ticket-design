@@ -406,7 +406,7 @@ public class Ticket {
     private void writeAUTH0() {
         boolean res;
         byte[] byte_AUTH0 = new byte[4];
-        byte_AUTH0 = intToByteArray(10, 4);
+        byte_AUTH0 = intToByteArray(6, 4);
         byte[] message = new byte[]{byte_AUTH0[3], byte_AUTH0[0], byte_AUTH0[1], byte_AUTH0[2]};
         res = utils.writePages(message, 0, 42, 1);
     }
