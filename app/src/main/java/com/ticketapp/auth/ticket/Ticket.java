@@ -61,6 +61,13 @@ public class Ticket {
     private static HashMap<String, String> cardLastUsed = new HashMap<>();
     private HttpURLConnection urlConnection = null;
 
+    private final long TIMESTAMP2020 = 1577829600; // timestamp for beginning of 2020
+    private final long EXPIRYSECONDS = 60; // number of seconds for expiry date, currently one minute
+    private final int NUMBER_OF_ISSUED_TICKETS = 5; // number of issued tickets, currently five
+    private final String CLOUD_IP = "3.82.215.225";
+    private final String CLOUD_PORT = "5000";
+    private final int DOUBLE_TAP_MISTAKE_SECONDS = 3; // number of seconds that needs to pass for the reader to allow a new validation;
+
     /** Create a new ticket */
     public Ticket() throws GeneralSecurityException {
         // Set HMAC key for the ticket
@@ -291,8 +298,8 @@ public class Ticket {
     private void writeExpiryDate() {
         boolean res;
         long unixTime = System.currentTimeMillis() / 1000L;
-        unixTime -= 1577829600; // timestamp for beginning of 2020
-        unixTime += 60;
+        unixTime -= TIMESTAMP2020; // timestamp for beginning of 2020
+        unixTime += EXPIRYSECONDS;
         byte[] message = ByteBuffer.allocate(4).putInt((int) unixTime).array();
         res = utils.writePages(message, 0, 7, 1);
     }
@@ -303,7 +310,7 @@ public class Ticket {
         res = utils.readPages(6, 1, message, 0);
         BigInteger bigint_number_of_rides = new BigInteger(message);
         int int_number_of_rides = bigint_number_of_rides.intValue();
-        int_number_of_rides += 5;
+        int_number_of_rides += NUMBER_OF_ISSUED_TICKETS;
 
         message = intToByteArray(int_number_of_rides, 4);
         writeNumberOfTickets(message);
@@ -326,7 +333,7 @@ public class Ticket {
         long expiry_date = ByteBuffer.wrap(message).getInt();
         expiryTime = Math.toIntExact(expiry_date);
         long unixTime = System.currentTimeMillis() / 1000L;
-        unixTime -= 1577829600;
+        unixTime -= TIMESTAMP2020;
         boolean expired = unixTime > expiry_date;
         if (expired == true){
             return 0;
@@ -406,7 +413,7 @@ public class Ticket {
     private void writeAUTH0() {
         boolean res;
         byte[] byte_AUTH0 = new byte[4];
-        byte_AUTH0 = intToByteArray(6, 4);
+        byte_AUTH0 = intToByteArray(4, 4);
         byte[] message = new byte[]{byte_AUTH0[3], byte_AUTH0[0], byte_AUTH0[1], byte_AUTH0[2]};
         res = utils.writePages(message, 0, 42, 1);
     }
@@ -414,7 +421,7 @@ public class Ticket {
     private void writeAUTH1() {
         boolean res;
         byte[] byte_AUTH1 = new byte[4];
-        byte_AUTH1 = intToByteArray(0, 4);
+        byte_AUTH1 = intToByteArray(1, 4);
         byte[] message = new byte[]{byte_AUTH1[3], byte_AUTH1[0], byte_AUTH1[1], byte_AUTH1[2]};
         res = utils.writePages(message, 0, 43, 1);
     }
@@ -488,7 +495,7 @@ public class Ticket {
 
         int seconds_to_expiry;
         if (first_time_validation){
-            seconds_to_expiry = 60;
+            seconds_to_expiry = (int) EXPIRYSECONDS;
         }
         else {
             seconds_to_expiry = secondsToTicketExpiry();
@@ -545,7 +552,7 @@ public class Ticket {
         if (cardLastUsed.containsKey(card_id)) {
             long last_used = Long.parseLong(cardLastUsed.get(card_id));
             long unixTime = System.currentTimeMillis() / 1000L;
-            if ((unixTime - 3) < last_used) {
+            if ((unixTime - DOUBLE_TAP_MISTAKE_SECONDS) < last_used) {
                 System.out.println("double tap by mistake");
                 ticket_validation_was_not_success = true;
             }
@@ -561,7 +568,7 @@ public class Ticket {
         }
         else {
             isValid = true;
-            String message_string = "Ticket validation was a success. Rides left: "+(number_of_tickets_left-1)+", Time left: "+seconds_to_expiry;
+            String message_string = "Ticket validation was a success. Rides left: "+(number_of_tickets_left-1)+", Time left: "+seconds_to_expiry+" seconds";
             message = message_string.getBytes();
 
             long unixTime = System.currentTimeMillis() / 1000L;
@@ -626,8 +633,8 @@ public class Ticket {
         res = utils.readPages(7, 1, message, 0);
         long expiry_date = ByteBuffer.wrap(message).getInt();
         long unixTime = System.currentTimeMillis() / 1000L;
-        unixTime -= 1577829600;
-        expiry_date = expiry_date + (60 - (expiry_date - unixTime));
+        unixTime -= TIMESTAMP2020;
+        expiry_date = expiry_date + (EXPIRYSECONDS - (expiry_date - unixTime));
         message = ByteBuffer.allocate(4).putInt((int) expiry_date).array();
         res = utils.writePages(message, 0, 7, 1);
     }
@@ -693,7 +700,7 @@ public class Ticket {
 
     private void sendLogToServer(String card_id, String type) {
         try {
-            URL url = new URL("http://3.82.215.225:5000/ticketing-log");
+            URL url = new URL("http://"+CLOUD_IP+":"+CLOUD_PORT+"/ticketing-log");
 
             urlConnection = (HttpURLConnection) url.openConnection();
 
